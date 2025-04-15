@@ -89,7 +89,7 @@ func packageHandler(w http.ResponseWriter, r *http.Request) {
 	// We shouldnt ignore write errors
 	_, _ = w.Write(stringified)
 
-	fmt.Printf("Exectution time for %s@%s:  %vs\n", pkgName, pkgVersion, time.Since(start))
+	fmt.Printf("Execution time for %s@%s:  %vs\n", pkgName, pkgVersion, time.Since(start))
 }
 
 func resolveDependencies(pkg *NpmPackageVersion, versionConstraint string, visited map[string]bool) error {
@@ -106,10 +106,18 @@ func resolveDependencies(pkg *NpmPackageVersion, versionConstraint string, visit
 	// Check for circular dependnacy
 
 	// generate key
-	key := fmt.Sprintf("%s%s", pkg.Name, pkg.Version) // will be react16.13.0
+	key := fmt.Sprintf("%s@v%s", pkg.Name, pkg.Version) // will be react@v16.13.0
 
 	// if we have seen it before
 	if visited[key] {
+		// a -> b -> c -> a -> b
+		// a -> b -> c
+		// a -> b -> c -> a
+		// assign a to be a dependancy of c
+		// visited map should be unique per branch
+		//  a -> b -> d
+		// a -> c -> d are both valid
+		fmt.Println("dependency", pkg.Name)
 		return nil
 	}
 	visited[key] = true
