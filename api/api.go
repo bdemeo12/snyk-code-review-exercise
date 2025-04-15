@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -63,8 +64,7 @@ func packageHandler(w http.ResponseWriter, r *http.Request) {
 	// 	if err != nil {}
 	// Just pick a error check/return pattern and make it uniform throughout the code
 
-	visited := make(map[string]bool)
-	if err := resolveDependencies(rootPkg, pkgVersion, visited); err != nil {
+	if err := resolveDependencies(rootPkg, pkgVersion); err != nil {
 		// Review Comment:
 		// We shouldnt print errors. Should introduce logger.
 		println(err.Error())
@@ -92,7 +92,13 @@ func packageHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("Exectution time for %s@%s:  %vs\n", pkgName, pkgVersion, time.Since(start))
 }
 
-func resolveDependencies(pkg *NpmPackageVersion, versionConstraint string, visited map[string]bool) error {
+func resolveDependencies(pkg *NpmPackageVersion, versionConstraint string) error {
+	visited := make(map[string]bool)
+	mu := &sync.Mutex{}
+	return resolveDependenciesHelper(pkg, versionConstraint, visited, mu)
+}
+
+func resolveDependenciesHelper(pkg *NpmPackageVersion, versionConstraint string, visited map[string]bool, mu *sync.Mutex) error {
 	pkgMeta, err := fetchPackageMeta(pkg.Name)
 	if err != nil {
 		return err
@@ -103,16 +109,19 @@ func resolveDependencies(pkg *NpmPackageVersion, versionConstraint string, visit
 	}
 	pkg.Version = concreteVersion
 
-	// Check for circular dependnacy
-
 	// generate key
-	key := fmt.Sprintf("%s%s", pkg.Name, pkg.Version) // will be react16.13.0
+	key := fmt.Sprintf("%s%s", pkg.Name, pkg.Version) // will beç react16.13.0
+
+	// now lock
+	mu.Lock()
 
 	// if we have seen it before
 	if visited[key] {
+		mu.Unlock()
 		return nil
 	}
 	visited[key] = true
+	mu.Unlock()
 
 	npmPkg, err := fetchPackage(pkg.Name, pkg.Version)
 	if err != nil {
@@ -131,6 +140,10 @@ func resolveDependencies(pkg *NpmPackageVersion, versionConstraint string, visit
 	// With no clear endpoint we can hit infinite recursion/ be performing duplicate work
 	// - We could use a map of pkgName to visited bool
 	// - curl -s http://localhost:3000/package/trucolor/4.0.4 | jq .
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 1) // buffered channel: 1 is the buffer size. means we can write to the channel any time we have an error
+
 	for dependencyName, dependencyVersionConstraint := range npmPkg.Dependencies {
 		// Review Comments: Nitpick
 		// It is technically better to not set Dependancies to empty struct here.
@@ -138,11 +151,29 @@ func resolveDependencies(pkg *NpmPackageVersion, versionConstraint string, visit
 		// Also means we can check for nil, instead of empty.
 		dep := &NpmPackageVersion{Name: dependencyName, Dependencies: map[string]*NpmPackageVersion{}}
 		pkg.Dependencies[dependencyName] = dep
-		if err := resolveDependencies(dep, dependencyVersionConstraint, visited); err != nil {
-			return err // slow, could add concurrancy
-		}
+
+		wg.Add(1)
+		fmt.Printf("Resolving: %s@%s\n", pkg.Name, pkg.Version)
+		go func(dep *NpmPackageVersion, dependencyVersionConstraint string) {
+			defer wg.Done()
+
+			if err := resolveDependenciesHelper(dep, dependencyVersionConstraint, visited, mu); err != nil {
+				select {
+				case errs <- err:
+				default:
+				}
+			}
+		}(dep, dependencyVersionConstraint)
 	}
-	return nil
+
+	wg.Wait()
+
+	select {
+	case err := <-errs: // Return first error if any
+		return err
+	default:
+		return nil
+	}
 }
 
 func highestCompatibleVersion(constraintStr string, versions *npmPackageMetaResponse) (string, error) {
