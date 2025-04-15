@@ -118,6 +118,7 @@ func resolveDependenciesHelper(pkg *NpmPackageVersion, versionConstraint string,
 	// if we have seen it before
 	if visited[key] {
 		mu.Unlock()
+		// log circular dep ?
 		return nil
 	}
 	visited[key] = true
