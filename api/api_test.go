@@ -16,11 +16,11 @@ import (
 
 func TestPackageHandler(t *testing.T) {
 	// Review Comments:
-	// This test will test packageHandler, which will downstream call fetchPacakge, and fetchPackageMetadata.
+	// This test will test packageHandler, which will downstream call fetchPackage, and fetchPackageMetadata.
 	// This means we are making calls directly to NPM every time we run this test.
 	// We should mock these calls because:
 	//	- What is NPM registry is down. Our tests will fail.
-	//	- It is not polite to NPM registryt
+	//	- It is not polite to NPM registry
 	//	- It is slow
 	// We can write out own mocks or generate mocks with GOA: https://pkg.go.dev/goa.design/clue/mock
 	handler := api.New()
@@ -53,7 +53,7 @@ func TestPackageHandler(t *testing.T) {
 	// 	- NPM resolves versions dynamically
 	// 	- Different versions of a package at different times, different points in processing
 	//  - Can fix this with mocks
-	// fixtureObj contains dependancies which have pointers. We cannot compare pointers like this.
+	// fixtureObj contains dependencies which have pointers. We cannot compare pointers like this.
 	// Pointers are just a reference to where the data is store, not the actual data.
 	// We should marshal fixtureObj and Data to Bytes and then compare the bytes.
 	assert.Equal(t, fixtureObj, data)
@@ -65,4 +65,4 @@ func TestPackageHandler(t *testing.T) {
 // - invalid package name
 // - invalid version
 // - npm is unreachable
-// - circular dependancy
+// - circular dependency

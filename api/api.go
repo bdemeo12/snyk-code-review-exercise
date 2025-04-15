@@ -30,7 +30,7 @@ type npmPackageResponse struct {
 	Dependencies map[string]string `json:"dependencies"`
 }
 
-// Review Comments:
+// Review Comments: * Product context needed *
 // We should use JSON tag: omitempty for Dependencies.
 // When we unmarshal JSON where Dependancies is empty, our json will omit the field all together
 // instead of displaying it like Dependancies{}.
@@ -44,7 +44,7 @@ type NpmPackageVersion struct {
 
 // Review Comments: Beyond Scope
 // We could add some sort of "cache" so that we do not need walk trees for packages we have already seen
-func packageHandler(w http.ResponseWriter, r *http.Request) { //
+func packageHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 
 	// Review Comments:
@@ -52,6 +52,9 @@ func packageHandler(w http.ResponseWriter, r *http.Request) { //
 	// If either var is empty, we should log an error, letting the user know that that we do not accept empty input
 	pkgName := vars["package"]
 	pkgVersion := vars["version"]
+
+	// Review Comments:
+	// We need to handle special URLs the require encoding: http://localhost:3000/package/@snyk/snyk-docker-plugin/6.15.2
 
 	rootPkg := &NpmPackageVersion{Name: pkgName, Dependencies: map[string]*NpmPackageVersion{}}
 	// Review Comment: Nitpick about style consistancy
@@ -104,24 +107,27 @@ func resolveDependencies(pkg *NpmPackageVersion, versionConstraint string) error
 	// Review Comments:
 	//
 	// When testing via curl, I noticed a few things:
-	// 1. This is not optomized for large pacakges.
+	// 1. This is not optimized for large packages.
 	// 	The terminal hangs with no feedback to the user, that there is still processing happening.
-	// 		- We can optomize by doing this concurrently. Each dependacy can be processed in a go routine.
+	// 		- We can optimize by doing this concurrently. Each dependency can be processed in a go routine.
 	//		- This package takes a while: curl -s http://localhost:3000/package/express/5.1.0 | jq .
-	// 2. We are gonna have circular dependancies
-	// If we have dependancy structure: pkg a -> pkg b -> pkg c -> pkg a.
+	// 2. We are gonna have circular dependencies
+	// If we have dependency structure: pkg a -> pkg b -> pkg c -> pkg a.
 	// With no clear endpoint we can hit infinite recursion/ be performing duplicate work
-	// - We could use a map of pkgName to visited bool
+	// - We could use a map of pkgName@ to visited bool
 	// - curl -s http://localhost:3000/package/trucolor/4.0.4 | jq .
 	for dependencyName, dependencyVersionConstraint := range npmPkg.Dependencies {
 		// Review Comments: Nitpick
-		// It is technically better to not set Dependancies to empty struct here.
+		// It is technically better to not set dependencies to empty struct here.
 		// It will be assigned later.
 		// Also means we can check for nil, instead of empty.
 		dep := &NpmPackageVersion{Name: dependencyName, Dependencies: map[string]*NpmPackageVersion{}}
 		pkg.Dependencies[dependencyName] = dep
 		if err := resolveDependencies(dep, dependencyVersionConstraint); err != nil {
-			return err // slow, could add concurrancy
+			return err
+			// Review Comment:
+			// Slow, add concurrency to speed this up
+			// - Can wrap this in a go routine, that writes errs to err channel, that will return the first err
 		}
 	}
 	return nil
