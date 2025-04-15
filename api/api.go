@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/gorilla/mux"
@@ -44,7 +45,9 @@ type NpmPackageVersion struct {
 
 // Review Comments: Beyond Scope
 // We could add some sort of "cache" so that we do not need walk trees for packages we have already seen
-func packageHandler(w http.ResponseWriter, r *http.Request) { //
+func packageHandler(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+
 	vars := mux.Vars(r)
 
 	// Review Comments:
@@ -59,7 +62,9 @@ func packageHandler(w http.ResponseWriter, r *http.Request) { //
 	// 	err := ...
 	// 	if err != nil {}
 	// Just pick a error check/return pattern and make it uniform throughout the code
-	if err := resolveDependencies(rootPkg, pkgVersion); err != nil {
+
+	visited := make(map[string]bool)
+	if err := resolveDependencies(rootPkg, pkgVersion, visited); err != nil {
 		// Review Comment:
 		// We shouldnt print errors. Should introduce logger.
 		println(err.Error())
@@ -83,9 +88,11 @@ func packageHandler(w http.ResponseWriter, r *http.Request) { //
 	// Review Comment:
 	// We shouldnt ignore write errors
 	_, _ = w.Write(stringified)
+
+	fmt.Printf("Exectution time for %s@%s:  %vs\n", pkgName, pkgVersion, time.Since(start))
 }
 
-func resolveDependencies(pkg *NpmPackageVersion, versionConstraint string) error {
+func resolveDependencies(pkg *NpmPackageVersion, versionConstraint string, visited map[string]bool) error {
 	pkgMeta, err := fetchPackageMeta(pkg.Name)
 	if err != nil {
 		return err
@@ -95,6 +102,17 @@ func resolveDependencies(pkg *NpmPackageVersion, versionConstraint string) error
 		return err
 	}
 	pkg.Version = concreteVersion
+
+	// Check for circular dependnacy
+
+	// generate key
+	key := fmt.Sprintf("%s%s", pkg.Name, pkg.Version) // will be react16.13.0
+
+	// if we have seen it before
+	if visited[key] {
+		return nil
+	}
+	visited[key] = true
 
 	npmPkg, err := fetchPackage(pkg.Name, pkg.Version)
 	if err != nil {
@@ -120,7 +138,7 @@ func resolveDependencies(pkg *NpmPackageVersion, versionConstraint string) error
 		// Also means we can check for nil, instead of empty.
 		dep := &NpmPackageVersion{Name: dependencyName, Dependencies: map[string]*NpmPackageVersion{}}
 		pkg.Dependencies[dependencyName] = dep
-		if err := resolveDependencies(dep, dependencyVersionConstraint); err != nil {
+		if err := resolveDependencies(dep, dependencyVersionConstraint, visited); err != nil {
 			return err // slow, could add concurrancy
 		}
 	}
