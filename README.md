@@ -35,3 +35,40 @@ You can run the tests with:
 go test ...
 ```
 
+
+## Commands To Run 
+
+### ok
+```sh
+ curl -s http://localhost:3000/package/react/16.13.0 | jq .
+```
+### large package
+```sh
+ curl -s http://localhost:3000/package/express/4.21.2 | jq .
+```
+### massive package
+```sh
+http://localhost:3000/package/npm/11.0.0 | jq .
+```
+### circular dependencies
+TrueColor has a dependency Term-ng: https://www.npmjs.com/package/trucolor?activeTab=dependencies
+Term-ng has a dependency TrueColor: https://www.npmjs.com/package/term-ng?activeTab=dependencies
+```sh
+curl -s http://localhost:3000/package/trucolor/4.0.4 | jq .
+```
+### invalid naming convention
+```sh
+curl -s http://localhost:3000/package/@snyk/snyk-docker-plugin/6.15.2 | jq .
+```
+### Another Large Package
+```sh
+curl -s http://localhost:3000/package/snyk-docker-plugin/6.15.2 | jq .
+```
+### Not Valid
+```sh
+curl -s http://localhost:3000/package/undefined/undefined | jq .
+```
+### Not Valid
+```sh
+curl -s http://localhost:3000/package/gibberish1234/1.0.0 | jq .
+```

@@ -32,8 +32,8 @@ type npmPackageResponse struct {
 
 // Review Comments: * Product context needed *
 // We should use JSON tag: omitempty for Dependencies.
-// When we unmarshal JSON where Dependancies is empty, our json will omit the field all together
-// instead of displaying it like Dependancies{}.
+// When we unmarshal JSON where Dependencies is empty, our json will omit the field all together
+// instead of displaying it like Dependencies{}.
 // Not go best practice to pass around empty structs
 
 type NpmPackageVersion struct {
@@ -57,14 +57,14 @@ func packageHandler(w http.ResponseWriter, r *http.Request) {
 	// We need to handle special URLs the require encoding: http://localhost:3000/package/@snyk/snyk-docker-plugin/6.15.2
 
 	rootPkg := &NpmPackageVersion{Name: pkgName, Dependencies: map[string]*NpmPackageVersion{}}
-	// Review Comment: Nitpick about style consistancy
-	// If err := ...; err != nil {} is an okay syntax, but otherplaces of the code do a more standard
+	// Review Comment: Nitpick about style consistency
+	// If err := ...; err != nil {} is an okay syntax, but other places of the code do a more standard
 	// 	err := ...
 	// 	if err != nil {}
 	// Just pick a error check/return pattern and make it uniform throughout the code
 	if err := resolveDependencies(rootPkg, pkgVersion); err != nil {
 		// Review Comment:
-		// We shouldnt print errors. Should introduce logger.
+		// We shouldn't print errors. Should introduce logger.
 		println(err.Error())
 		// Review Comment: Nitpick
 		// Its better practice to return Http status codes via const
@@ -84,7 +84,7 @@ func packageHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(200)
 
 	// Review Comment:
-	// We shouldnt ignore write errors
+	// We shouldn't ignore write errors
 	_, _ = w.Write(stringified)
 }
 
@@ -117,10 +117,6 @@ func resolveDependencies(pkg *NpmPackageVersion, versionConstraint string) error
 	// - We could use a map of pkgName@ to visited bool
 	// - curl -s http://localhost:3000/package/trucolor/4.0.4 | jq .
 	for dependencyName, dependencyVersionConstraint := range npmPkg.Dependencies {
-		// Review Comments: Nitpick
-		// It is technically better to not set dependencies to empty struct here.
-		// It will be assigned later.
-		// Also means we can check for nil, instead of empty.
 		dep := &NpmPackageVersion{Name: dependencyName, Dependencies: map[string]*NpmPackageVersion{}}
 		pkg.Dependencies[dependencyName] = dep
 		if err := resolveDependencies(dep, dependencyVersionConstraint); err != nil {
