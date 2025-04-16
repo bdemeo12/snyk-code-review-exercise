@@ -80,6 +80,16 @@ func packageHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// // *** Printing to file to see file structure
+
+	// fileName := fmt.Sprintf("%s@%s.json", pkgName, pkgVersion)
+	// err = os.WriteFile(fileName, stringified, 0644)
+	// if err != nil {
+	// 	println(err.Error())
+	// }
+
+	// // ***
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 
@@ -114,16 +124,13 @@ func resolveDependencies(pkg *NpmPackageVersion, versionConstraint string) error
 	// 2. We are gonna have circular dependencies
 	// If we have dependency structure: pkg a -> pkg b -> pkg c -> pkg a.
 	// With no clear endpoint we can hit infinite recursion/ be performing duplicate work
-	// - We could use a map of pkgName@ to visited bool
+	// - We could use a stack to track a trees branch, ensuring uniqueness
 	// - curl -s http://localhost:3000/package/trucolor/4.0.4 | jq .
 	for dependencyName, dependencyVersionConstraint := range npmPkg.Dependencies {
 		dep := &NpmPackageVersion{Name: dependencyName, Dependencies: map[string]*NpmPackageVersion{}}
 		pkg.Dependencies[dependencyName] = dep
 		if err := resolveDependencies(dep, dependencyVersionConstraint); err != nil {
 			return err
-			// Review Comment:
-			// Slow, add concurrency to speed this up
-			// - Can wrap this in a go routine, that writes errs to err channel, that will return the first err
 		}
 	}
 	return nil
