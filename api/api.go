@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"sort"
 	"time"
 
@@ -63,8 +64,7 @@ func packageHandler(w http.ResponseWriter, r *http.Request) {
 	// 	if err != nil {}
 	// Just pick a error check/return pattern and make it uniform throughout the code
 
-	visited := make(map[string]bool)
-	if err := resolveDependencies(rootPkg, pkgVersion, visited); err != nil {
+	if err := resolveDependencies(rootPkg, pkgVersion, []string{}); err != nil {
 		// Review Comment:
 		// We shouldnt print errors. Should introduce logger.
 		println(err.Error())
@@ -82,6 +82,11 @@ func packageHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	filename := fmt.Sprintf("%s@%s.json", pkgName, pkgVersion)
+	if err := os.WriteFile(filename, stringified, 0644); err != nil {
+		fmt.Printf("Failed to write file: %v\n", err)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 
@@ -92,7 +97,8 @@ func packageHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("Execution time for %s@%s:  %vs\n", pkgName, pkgVersion, time.Since(start))
 }
 
-func resolveDependencies(pkg *NpmPackageVersion, versionConstraint string, visited map[string]bool) error {
+func resolveDependencies(pkg *NpmPackageVersion, versionConstraint string, stack []string) error {
+
 	pkgMeta, err := fetchPackageMeta(pkg.Name)
 	if err != nil {
 		return err
@@ -103,29 +109,28 @@ func resolveDependencies(pkg *NpmPackageVersion, versionConstraint string, visit
 	}
 	pkg.Version = concreteVersion
 
-	// Check for circular dependnacy
-
-	// generate key
-	key := fmt.Sprintf("%s@v%s", pkg.Name, pkg.Version) // will be react@v16.13.0
-
-	// if we have seen it before
-	if visited[key] {
-		// a -> b -> c -> a -> b
-		// a -> b -> c
-		// a -> b -> c -> a
-		// assign a to be a dependancy of c
-		// visited map should be unique per branch
-		//  a -> b -> d
-		// a -> c -> d are both valid
-		fmt.Println("dependency", pkg.Name)
-		return nil
-	}
-	visited[key] = true
-
 	npmPkg, err := fetchPackage(pkg.Name, pkg.Version)
 	if err != nil {
 		return err
 	}
+
+	// Check for circular dependency:
+
+	// Generate key for stack
+	key := fmt.Sprintf("%s@v%s", pkg.Name, pkg.Version) // will be react@v16.13.0
+
+	// check if key is in stack
+	for i, k := range stack {
+		if k == key {
+			// Circular dependency detected
+			circularPath := append(stack[i:], key) // Include the cycle in the path
+			fmt.Printf("Circular dependency detected: %s\n", circularPath)
+
+			return nil
+		}
+	}
+	// add to stack
+	stack = append(stack, key)
 
 	// Review Comments:
 	//
@@ -137,7 +142,7 @@ func resolveDependencies(pkg *NpmPackageVersion, versionConstraint string, visit
 	// 2. We are gonna have circular dependancies
 	// If we have dependancy structure: pkg a -> pkg b -> pkg c -> pkg a.
 	// With no clear endpoint we can hit infinite recursion/ be performing duplicate work
-	// - We could use a map of pkgName to visited bool
+	// - We could use a stack
 	// - curl -s http://localhost:3000/package/trucolor/4.0.4 | jq .
 	for dependencyName, dependencyVersionConstraint := range npmPkg.Dependencies {
 		// Review Comments: Nitpick
@@ -146,10 +151,14 @@ func resolveDependencies(pkg *NpmPackageVersion, versionConstraint string, visit
 		// Also means we can check for nil, instead of empty.
 		dep := &NpmPackageVersion{Name: dependencyName, Dependencies: map[string]*NpmPackageVersion{}}
 		pkg.Dependencies[dependencyName] = dep
-		if err := resolveDependencies(dep, dependencyVersionConstraint, visited); err != nil {
+		if err := resolveDependencies(dep, dependencyVersionConstraint, stack); err != nil {
 			return err // slow, could add concurrancy
 		}
 	}
+
+	// Remove the current package from the stack after processing
+	//stack = stack[:len(stack)-1]
+
 	return nil
 }
 
