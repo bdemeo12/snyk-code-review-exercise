@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"sort"
 	"sync"
 	"time"
@@ -41,7 +42,7 @@ type npmPackageResponse struct {
 type NpmPackageVersion struct {
 	Name         string                        `json:"name"`
 	Version      string                        `json:"version"`
-	Dependencies map[string]*NpmPackageVersion `json:"dependencies"`
+	Dependencies map[string]*NpmPackageVersion `json:"dependencies,omitempty"`
 }
 
 // Review Comments: Beyond Scope
@@ -63,8 +64,7 @@ func packageHandler(w http.ResponseWriter, r *http.Request) {
 	// 	err := ...
 	// 	if err != nil {}
 	// Just pick a error check/return pattern and make it uniform throughout the code
-
-	if err := resolveDependencies(rootPkg, pkgVersion); err != nil {
+	if err := resolveDependencies(rootPkg, pkgVersion, []string{}); err != nil {
 		// Review Comment:
 		// We shouldnt print errors. Should introduce logger.
 		println(err.Error())
@@ -82,6 +82,11 @@ func packageHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	filename := fmt.Sprintf("%s@%s.json", pkgName, pkgVersion)
+	if err := os.WriteFile(filename, stringified, 0644); err != nil {
+		fmt.Printf("Failed to write file: %v\n", err)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 
@@ -89,16 +94,11 @@ func packageHandler(w http.ResponseWriter, r *http.Request) {
 	// We shouldnt ignore write errors
 	_, _ = w.Write(stringified)
 
-	fmt.Printf("Exectution time for %s@%s:  %vs\n", pkgName, pkgVersion, time.Since(start))
+	fmt.Printf("Execution time for %s@%s:  %vs\n", pkgName, pkgVersion, time.Since(start))
 }
 
-func resolveDependencies(pkg *NpmPackageVersion, versionConstraint string) error {
-	visited := make(map[string]bool)
-	mu := &sync.Mutex{}
-	return resolveDependenciesHelper(pkg, versionConstraint, visited, mu)
-}
+func resolveDependencies(pkg *NpmPackageVersion, versionConstraint string, stack []string) error {
 
-func resolveDependenciesHelper(pkg *NpmPackageVersion, versionConstraint string, visited map[string]bool, mu *sync.Mutex) error {
 	pkgMeta, err := fetchPackageMeta(pkg.Name)
 	if err != nil {
 		return err
@@ -109,25 +109,28 @@ func resolveDependenciesHelper(pkg *NpmPackageVersion, versionConstraint string,
 	}
 	pkg.Version = concreteVersion
 
-	// generate key
-	key := fmt.Sprintf("%s%s", pkg.Name, pkg.Version) // will beç react16.13.0
-
-	// now lock
-	mu.Lock()
-
-	// if we have seen it before
-	if visited[key] {
-		mu.Unlock()
-		// log circular dep ?
-		return nil
-	}
-	visited[key] = true
-	mu.Unlock()
-
 	npmPkg, err := fetchPackage(pkg.Name, pkg.Version)
 	if err != nil {
 		return err
 	}
+
+	// Check for circular dependency:
+
+	// Generate key for stack
+	key := fmt.Sprintf("%s@v%s", pkg.Name, pkg.Version) // will be react@v16.13.0
+
+	// check if key is in stack
+	for i, k := range stack {
+		if k == key {
+			// Circular dependency detected
+			circularPath := append(stack[i:], key) // Include the cycle in the path
+			fmt.Printf("Circular dependency detected: %s\n", circularPath)
+
+			return nil
+		}
+	}
+	// add to stack
+	stack = append(stack, key)
 
 	// Review Comments:
 	//
@@ -139,42 +142,57 @@ func resolveDependenciesHelper(pkg *NpmPackageVersion, versionConstraint string,
 	// 2. We are gonna have circular dependancies
 	// If we have dependancy structure: pkg a -> pkg b -> pkg c -> pkg a.
 	// With no clear endpoint we can hit infinite recursion/ be performing duplicate work
-	// - We could use a map of pkgName to visited bool
+	// - We could use a stack
 	// - curl -s http://localhost:3000/package/trucolor/4.0.4 | jq .
 
 	var wg sync.WaitGroup
-	errs := make(chan error, 1) // buffered channel: 1 is the buffer size. means we can write to the channel any time we have an error
+	var mu sync.Mutex
+	var depErr error
+
+	// Map to hold dependencies while processing concurrently
+	depMap := make(map[string]*NpmPackageVersion)
 
 	for dependencyName, dependencyVersionConstraint := range npmPkg.Dependencies {
+		wg.Add(1)
 		// Review Comments: Nitpick
 		// It is technically better to not set Dependancies to empty struct here.
 		// It will be assigned later.
 		// Also means we can check for nil, instead of empty.
-		dep := &NpmPackageVersion{Name: dependencyName, Dependencies: map[string]*NpmPackageVersion{}}
-		pkg.Dependencies[dependencyName] = dep
-
-		wg.Add(1)
-		fmt.Printf("Resolving: %s@%s\n", pkg.Name, pkg.Version)
-		go func(dep *NpmPackageVersion, dependencyVersionConstraint string) {
+		go func(depName, depVersion string) {
 			defer wg.Done()
-
-			if err := resolveDependenciesHelper(dep, dependencyVersionConstraint, visited, mu); err != nil {
-				select {
-				case errs <- err:
-				default:
+			dep := &NpmPackageVersion{Name: dependencyName, Dependencies: map[string]*NpmPackageVersion{}}
+			newStack := append([]string{}, stack...)
+			if err := resolveDependencies(dep, dependencyVersionConstraint, newStack); err != nil {
+				mu.Lock()
+				if depErr == nil {
+					depErr = err
 				}
+				mu.Unlock()
+				return
 			}
-		}(dep, dependencyVersionConstraint)
+
+			mu.Lock()
+			depMap[depName] = dep
+			mu.Unlock()
+		}(dependencyName, dependencyVersionConstraint)
 	}
 
 	wg.Wait()
 
-	select {
-	case err := <-errs: // Return first error if any
-		return err
-	default:
-		return nil
+	if depErr != nil {
+		return depErr
 	}
+
+	// Update the original package's dependencies after all goroutines complete
+	mu.Lock()
+	for depName, dep := range depMap {
+		pkg.Dependencies[depName] = dep
+	}
+	mu.Unlock()
+
+	stack = stack[:len(stack)-1]
+
+	return nil
 }
 
 func highestCompatibleVersion(constraintStr string, versions *npmPackageMetaResponse) (string, error) {
